@@ -97,6 +97,9 @@ struct libnet_tcp_hdr
     u_int16_t th_urp;         /* urgent pointer */
 };
 
+char* url;
+int flag = 0;
+
 void usage() {
     printf("syntax : netfilter-test <host>\n");
     printf("sample : netfilter-test test.gilgil.net\n");
@@ -112,8 +115,23 @@ void dump(unsigned char* buf, int size) {
     printf("\n");
 }
 
-char* url;
-int flag = 0;
+int netfilter(unsigned char* buf, int size, int id) {
+    struct libnet_ipv4_hdr *ip_hdr = (struct libnet_ipv4_hdr*)buf;
+    struct libnet_tcp_hdr *tcp_hdr = (struct libnet_tcp_hdr*)(buf + sizeof(struct libnet_ipv4_hdr));
+    char* http_data = (char*)(buf + (sizeof(struct libnet_ipv4_hdr)) + sizeof(struct libnet_tcp_hdr));
+
+    flag = id;
+
+    regex_t regex;
+    int reti;
+    reti = regcomp(&regex, url, 0);
+
+    if (ip_hdr->ip_p != IPPROTO_TCP || ntohs(tcp_hdr->th_dport) != 80) return 1;
+    reti = regexec(&regex, http_data, 0, NULL, 0);
+
+    if (!reti) return 1;
+    else return 0;
+}
 
 /* returns packet id */
 static u_int32_t print_pkt (struct nfq_data *tb)
@@ -163,27 +181,10 @@ static u_int32_t print_pkt (struct nfq_data *tb)
 
     ret = nfq_get_payload(tb, &data);
     if (ret >= 0) {
-        // dump(data, ret);
+        printf("payload_len=%d\n", ret);
+        dump(data, ret);
+        id = netfilter(data, ret, id);
     }
-
-    printf("payload_len=%d\n", ret);
-
-    struct libnet_ipv4_hdr *ip_hdr = (struct libnet_ipv4_hdr*)data;
-    struct libnet_tcp_hdr *tcp_hdr = (struct libnet_tcp_hdr*)(data + sizeof(struct libnet_ipv4_hdr));
-    char* http_data = (char*)(data + (sizeof(struct libnet_ipv4_hdr)) + sizeof(struct libnet_tcp_hdr));
-
-    flag = id;
-
-    regex_t regex;
-    int reti;
-    reti = regcomp(&regex, url, 0);
-
-    if (ip_hdr->ip_p != IPPROTO_TCP || ntohs(tcp_hdr->th_dport) != 80) return 1;
-    reti = regexec(&regex, http_data, 0, NULL, 0);
-
-    if (!reti) return 1;
-    else return 0;
-
 
     fputc('\n', stdout);
     return id;
@@ -193,15 +194,9 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
               struct nfq_data *nfa, void *data)
 {
     u_int32_t id = print_pkt(nfa);
-    printf("entering callback\n");
-    if (id == 1) {
-        printf("This webpage is allowed.\n");
-        return nfq_set_verdict(qh, flag, NF_ACCEPT, 0, NULL);
-    }
-    else {
-        printf("This webpage is not allowed.\n");
-        return nfq_set_verdict(qh, flag, NF_DROP, 0, NULL);
-    }
+    printf("entering callback\n\n");
+
+    return nfq_set_verdict(qh, flag, id == 1 ? NF_ACCEPT : NF_DROP, 0, NULL);
 }
 
 int main(int argc, char **argv)
